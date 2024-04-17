@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+/model
+/Highway_Part1/test
+/runs_H
 # C extensions
 *.so
 
