@@ -6,6 +6,10 @@ __pycache__/
 /model
 /Highway_Part1/test
 /runs_H
+/saveReward
+
+Parking_Part2/test.py
+/RaceTrack_Part3/test.py
 # C extensions
 *.so
 
