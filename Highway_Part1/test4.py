@@ -8,6 +8,7 @@ from collections import deque
 import random
 import time
 import matplotlib.pyplot as plt
+import datetime
 from torch.utils.tensorboard import SummaryWriter
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -40,7 +41,7 @@ config = {
     # zero for other lanes.
     "high_speed_reward": 0.5,  # The reward received when driving at full speed, linearly mapped to zero for
     # lower speeds according to config["reward_speed_range"].
-    "lane_change_reward": 0,
+    "lane_change_reward": 0.2,
     "reward_speed_range": [
         20,
         30,
@@ -57,8 +58,13 @@ config = {
     "offscreen_rendering": False,
     "disable_collision_checks": True,
 }
-env = gym.make("highway-fast-v0", render_mode="rgb_array")
+
+
+
+
+env = gym.make("highway-v0", render_mode="rgb_array")
 env.unwrapped.configure(config)
+env.reset()
 initial_state = env.reset()[0].flatten()  # Assuming env.reset() returns state and additional info
 
 
@@ -120,7 +126,9 @@ def calculate_reward(reward):
         reward = -50
 
     if  float(speed_reward) <= 20 :
-        reward = -200
+        reward = -50
+    elif float(speed_reward) > 30 :
+        reward = -50
 
     return reward, on_road_reward, speed_reward
     
@@ -130,18 +138,39 @@ lrList = [5e-4]
 gammaList = [0.99]
 best_reward = 0
 totalRewardList = []
-time_step_reward = 0.01  # Récompense ajoutée pour chaque pas de temps
 offRoad = 0 # Nombre de fois où la voiture est sortie de la route
 
 speedAverage = 0
 
 # LOAD_MODEL = None
-LOAD_MODEL = r"saveReward\best_model_reward_753.4783529628656.pth"
-TRAIN = False
+LOAD_MODEL = r"saveReward\best_model_reward_890.1227488151658.pth"
+TRAIN = True
+if TRAIN:
+    # Configuration pour l'entraînement
+    train_config = {
+        "simulation_frequency": 5,  # Plus de mises à jour de simulation par seconde
+        "policy_frequency": 5,  # L'agent prend une décision chaque seconde
+        # Autres paramètres de configuration
+    }
+    env.unwrapped.configure(train_config)
+    env.reset()
+else :
+    # Configuration pour l'évaluation
+    eval_config = {
+        "lanes_count": 4,
+        "vehicles_count": 100,
+        "simulation_frequency": 5,  # Moins de mises à jour pour une simulation plus "lente"
+        "policy_frequency": 5,  # L'agent prend une décision toutes les 2 secondes
+        # Autres paramètres de configuration
+    }
+    env.unwrapped.configure(eval_config)
+    env.reset()
+
+
+
 
 def writeSummary(epsilon, epsilon_decay, epsilon_min, batch_size, gamma, lr):
-    return  (f"runs_H/20042024_1106_{epsilon}_epsilon_decay{epsilon_decay}_epsilon_min{epsilon_min}_batch_size{batch_size}_gamma{gamma}_lr{lr}_16layers")
-
+    return  (f"runs_H/TRY.01_{epsilon}_epsilon_decay{epsilon_decay}_epsilon_min{epsilon_min}_batch_size{batch_size}_gamma{gamma}_lr{lr}_16layers")
 
 
 
@@ -151,6 +180,7 @@ if TRAIN:
     target_net.train()
 else :
     if LOAD_MODEL is not None:
+        print("Model Loading ...")
         policy_net.load_state_dict(torch.load(LOAD_MODEL))
         policy_net.eval()
         target_net.load_state_dict(policy_net.state_dict())
@@ -170,17 +200,17 @@ for gamma in gammaList:
             epsilon_min = 0.001
             batch_size = 64
             gamma = gamma
-            num_episodes = 1_000_000
+            num_episodes = 200_000
             writer = SummaryWriter(writeSummary(epsilon, epsilon_decay, epsilon_min, batch_size, gamma, lr))
         else:
             optimizer = optim.Adam(policy_net.parameters(), lr=lr)
             memory = ReplayBuffer(15000)
             epsilon = 0
-            epsilon_decay = 0.0 # A tester : 0.99975
+            epsilon_decay = 0.0 
             epsilon_min = 0.00
-            batch_size = 32
+            batch_size = 64
             gamma = gamma
-            num_episodes = 1_000_000
+            num_episodes = 200
             writer = SummaryWriter(writeSummary(epsilon, epsilon_decay, epsilon_min, batch_size, gamma, lr))
         
        
@@ -189,37 +219,44 @@ for gamma in gammaList:
 
         # Training Loop
         for episode in range(num_episodes):
+
             state = env.reset()[0].flatten()
+
+            time_step_reward = 0.01  # Récompense ajoutée pour chaque pas de temps
             speedAverage = 0
             total_reward = 0
             time_average = 0
             last_action = None
-            writer.add_scalar("Epsilon", epsilon, episode)
 
             time_step = 0
-            speedCar = 0
-            render = False
+            speedCarInfo = 0
+
+            writer.add_scalar("Epsilon", epsilon, episode)
 
             while True:
+
+                if TRAIN:
+                    if episode % 100 == 0:
+                        env.render()
+
                 if not TRAIN:
                     env.render()
-                # env.render()
+                
+
                 state_tensor = torch.tensor([state], dtype=torch.float32).to(device)
                 action = select_action(state_tensor, policy_net, epsilon).item()
                 next_state, reward, done, truncated, info = env.step(action)
 
-                # print("tete de la voiture", env.unwrapped.vehicle.heading)
-                # print("off road reward", info['rewards']['on_road_reward'])
-                if info['rewards']['on_road_reward'] <= 0:
-                    offRoad += 1
-                # print("info", info, "truncated", truncated)
-                # print(info['speed'])
                 next_state = next_state.flatten()
 
                 reward, on_road_reward, speed_reward = calculate_reward(reward)
                 reward += time_step * time_step_reward
+
                 total_reward += reward
                 writer.add_scalar("TotReward", total_reward, episode)
+
+                if info['rewards']['on_road_reward'] <= 0:
+                    offRoad += 1
 
                 memory.push(state, action, reward, next_state, done)
                 state = next_state
@@ -246,47 +283,47 @@ for gamma in gammaList:
                         optimizer.zero_grad()
                         loss.backward()
                         optimizer.step()
-                        # time.sleep(1)
 
                 if on_road_reward <= 0:
                     offRoadList.append(episode)
                     break
-                if speed_reward <= 0:
+                if speed_reward <= 10:
                     break
+                
+
+                time_step += 1
+
+                if time_step > 0:
+                    speedCarInfo += float(info['speed'])/time_step
+                    
+                else :
+                    speedCarInfo += float(info['speed'])
+                writer.add_scalar("Speed", speedCarInfo, episode)
+
                 if done:
                     break
 
-                time_step += 1
-                if time_step > 0:
-                    speedCar += float(info['speed'])/time_step
-                    
-                else :
-                    speedCar += float(info['speed'])
-                writer.add_scalar("Speed", speedCar, episode)
-
-            
-
-            speedAverage += speedCar
+            speedAverage += speedCarInfo
             time_average += time_step
             writer.add_scalar("TimeStep", time_step, episode)
 
 
             if episode % 2000 == 0:  # Update the target network
                 target_net.load_state_dict(policy_net.state_dict())
-                print("offRoad per 2000 : ", offRoad)
+                print(f"{datetime.datetime.now().strftime('%d/%m/%Y, %H:%M:%S')} OffRoad per 2000 : ", offRoad)
                 offRoad = 0
             
             if episode % 100 == 0:
-                print(f"Moyenne Reward, episode {episode}", np.mean(totalRewardList[-99:]))
+                print(f"{datetime.datetime.now().strftime('%d/%m/%Y, %H:%M:%S')} Moyenne Reward, episode {episode}", np.mean(totalRewardList[-99:]))
             epsilon = max(epsilon * epsilon_decay, epsilon_min)
             totalRewardList.append(total_reward)
+
             if total_reward > best_reward:
                 best_reward = total_reward
                 "save the model"
                 torch.save(policy_net.state_dict(), f"saveReward/best_model_reward_{total_reward}.pth")
-                print(f"Episode {episode}: Total reward = {total_reward}")
+                print(f"{datetime.datetime.now().strftime('%d/%m/%Y, %H:%M:%S')} Episode {episode}: Total reward = {total_reward}")
             
-        print(len(offRoadList))
         print("Training completed.")
         
 writer.close()
