@@ -9,6 +9,7 @@ import torch.nn as nn
 from torch.distributions.normal import Normal
 import gymnasium as gym
 import datetime
+import time
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -101,9 +102,9 @@ class Policy_Network(nn.Module):
         # Shared Network
         self.shared_net = nn.Sequential(
             nn.Linear(obs_space_dims, hidden_space1),
-            nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(hidden_space1, hidden_space2),
-            nn.Tanh(),
+            nn.ReLU(),
         )
 
         # Policy Mean specific Linear Layer
@@ -246,7 +247,7 @@ config = {
         "type": "ContinuousAction"
     },
     "reward_weights": [1, 0.3, 0.1, 0.1, 0.02, 0.02], 
-    "simulation_frequency": 15,
+    "simulation_frequency": 10,
     "policy_frequency": 5,
     "screen_width": 600,
     "screen_height": 300,
@@ -265,10 +266,10 @@ Exemple: test_1_lr_1e-4_gamma_0.99_eps_1e-6
 
 """
 def writeSummary(learning_rate, gamma, eps):
-    return  (f"runs_H/test_best_param_2{learning_rate}{gamma}{eps}")
+    return  (f"runs_H/speed_decay_s{learning_rate}{gamma}{eps}")
 
 #parameters:
-epsilon_decay = 0.99975
+epsilon_decay = 0.99
 epsilon_min = 0.001
 
 #env
@@ -276,7 +277,7 @@ env = gym.make("parking-v0", render_mode="rgb_array")
 env.unwrapped.configure(config)
 wrapped_env = gym.wrappers.RecordEpisodeStatistics(env, 50)  # Records episode-reward
 #print('obs_sample', env.observation_space.sample())
-total_num_episodes = 20000  # Total number of episodes
+total_num_episodes = 200000  # Total number of episodes
 # Observation-space of parking-v0 
 obs_space_dims = sum(space.shape[0] for space in env.observation_space.spaces.values())
 # Action-space of parking-v0 
@@ -284,6 +285,20 @@ action_space_dims = env.action_space.shape[0]
 rewards_over_seeds = []
 
 
+def get_my_reward(obs, touched_in_ep):
+    distance = ((obs["desired_goal"][0] - obs["achieved_goal"][0])**2 + (obs["desired_goal"][1] - obs["achieved_goal"][1])**2)**0.5
+    
+    vitesse = abs(obs["achieved_goal"][2] + obs["achieved_goal"][3])/2
+
+    if not touched_in_ep:
+        reward = 1 / (1 + np.exp(distance))
+    else:
+        reward = -vitesse*10
+    #reward -= 0.1*vitesse/distance
+
+    if distance < 0.02 and distance > -0.02:
+        return 1000,True
+    return reward, False
 
 for seed in [1]:  # Fibonacci seeds
     # set seed
@@ -298,19 +313,25 @@ for seed in [1]:  # Fibonacci seeds
                 # Reinitialize agent every seed
                 agent = REINFORCE(obs_space_dims, action_space_dims,lr,gamma,eps)
                 reward_over_episodes = []
-
+                best_reward = 0
+                avg_reward = 0
                 for episode in range(total_num_episodes):
+                    time_step_reward = 0.05  # Récompense ajoutée pour chaque pas de temps
+                    time_step = 0
                     # gymnasium v26 requires users to set seed while resetting the environment
                     obs, info = wrapped_env.reset(seed=seed)
                     
                     total_reward_per_episode = 0
-                    best_reward = 0
+                    step = 0
+                    touched_in_ep = False
 
                     done = False
                     while not done:
+                        step+=1
                         "render the environment if you want to see the agent in action"
-                        if episode%10==0:
+                        if episode%100==0:
                             wrapped_env.render()
+
                         action = agent.sample_action(obs)
 
                         # Step return type - `tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]]`
@@ -318,9 +339,15 @@ for seed in [1]:  # Fibonacci seeds
                         # if the episode is terminated, if the episode is truncated and
                         # additional info from the step
                         obs, reward, terminated, truncated, info = wrapped_env.step(action)
-
+                        reward, touched = get_my_reward(obs, touched_in_ep)
+                        if touched:
+                            touched_in_ep = True
+                        reward -= time_step * time_step_reward
+                        #print("\nreward apres time", reward)
                         agent.rewards.append(reward)
+                        #if float(info["speed"]) >= 17 : break
                         total_reward_per_episode += reward
+                        
 
                         """ Print info tu verras y a des trucs intéressants dedans"""
                         #print(info)
@@ -334,8 +361,9 @@ for seed in [1]:  # Fibonacci seeds
                         #  - truncated: The episode duration reaches max number of timesteps
                         #  - terminated: Any of the state space values is no longer finite.
                         done = terminated or truncated
+                        time_step +=1
 
-                    reward_over_episodes.append(wrapped_env.return_queue[-1])
+                    #reward_over_episodes.append(wrapped_env.return_queue[-1])
                     agent.update()
 
                     # Ajout de la condition pour sauvegarder le meilleur modèle
@@ -343,18 +371,18 @@ for seed in [1]:  # Fibonacci seeds
                         best_reward = total_reward_per_episode
                         print("Seed:", seed, "Episode:", episode, "Best Reward:", best_reward)
                         "save the model"
-                        torch.save(agent.net.state_dict(), f"parking_model{best_reward}.pth")
+                        #torch.save(agent.net.state_dict(), f"parking_model{best_reward}.pth")
+                    # ajout du temps pour que tu  puisses voir l'évolution de l'apprentissage
+                    avg_reward = total_reward_per_episode/step
+                    if episode%50==0:
+                        print(f"{datetime.datetime.now().strftime('%d/%m/%Y, %H:%M:%S')} Episode:", episode, "Number au steps:", step, "Average Reward:", avg_reward)
+                    #elif avg_reward > 0:
+                        #print("Episode:", episode, "Average Reward:", avg_reward, "Touched:",str(touched_in_ep))
+                    #print(f"{datetime.datetime.now().strftime('%d/%m/%Y, %H:%M:%S')} Episode:", episode, "Average Reward:", avg_reward)
+                    agent.eps = max(agent.eps*epsilon_decay,epsilon_min)
 
-                    if episode % 1 == 0:
-                        avg_reward = int(np.mean(wrapped_env.return_queue))
-                        # ajout du temps pour que tu  puisses voir l'évolution de l'apprentissage
-                        print(f"{datetime.datetime.now().strftime('%d/%m/%Y, %H:%M:%S')} Episode:", episode, "Average Reward:", avg_reward)
-                        agent.eps = max(agent.eps*epsilon_decay,epsilon_min)
-                    """
-                    Voilà comment faire un writer je te laisse faire de même pour les autres variables que tu veux voir dans tensorboard
-                    
-                    """
-                    agent.writer.add_scalar("Reward", total_reward_per_episode, episode)
+                    agent.writer.add_scalar("Reward", total_reward_per_episode/step, episode)
+                    agent.writer.add_scalar("Epsilon", agent.eps, episode)
 
 
-    rewards_over_seeds.append(reward_over_episodes)
+    #rewards_over_seeds.append(reward_over_episodes)
