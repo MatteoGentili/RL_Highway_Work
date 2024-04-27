@@ -11,7 +11,6 @@ import numpy as np
 from collections import deque
 import random
 import time
-import matplotlib.pyplot as plt
 import datetime
 import os 
 
@@ -28,7 +27,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 config = {
     "observation": {
         "type": "OccupancyGrid",
-        "vehicles_count": 1,
+        "vehicles_count": 10,
         "features": ["presence", "x", "y", "vx", "vy", "cos_h", "sin_h"],
         "features_range": {
             "x": [-100, 100],
@@ -44,20 +43,20 @@ config = {
         "type": "DiscreteAction",
     },
     "lanes_count": 3,
-    "vehicles_count": 1,
-    "duration": 30,  # [s]
+    "vehicles_count": 10,
+    "duration": 50,  # [s]
     "initial_spacing": 0,
     "collision_reward": -10,  # The reward received when colliding with a vehicle.
     "right_lane_reward": 0.5,  # The reward received when driving on the right-most lanes, linearly mapped to
     # zero for other lanes.
     "high_speed_reward": 0.5,  # The reward received when driving at full speed, linearly mapped to zero for
     # lower speeds according to config["reward_speed_range"].
-    "lane_change_reward": 0,
+    "lane_change_reward": 5,
     "reward_speed_range": [
         25,
         30,
     ],  # [m/s] The reward for high speed is mapped linearly from this range to [0, HighwayEnv.HIGH_SPEED_REWARD].
-    "simulation_frequency": 50,  # [Hz]
+    "simulation_frequency": 15,  # [Hz]
     "policy_frequency": 2,  # [Hz]
     "other_vehicles_type": "highway_env.vehicle.behavior.IDMVehicle",
     "screen_width": 600,  # [px]
@@ -70,6 +69,7 @@ config = {
     "disable_collision_checks": True,
 }
 
+    
 ########################################################
 
 env = gym.make("highway-v0", render_mode="rgb_array")
@@ -78,6 +78,7 @@ env.reset()
 initial_state = env.reset()[0].flatten()
 
 ########################################################
+nameparamWrite = 256
 
 ########################################################
 ################        DQN          ###################
@@ -86,9 +87,9 @@ initial_state = env.reset()[0].flatten()
 class DQN(nn.Module):
     def __init__(self, state_dim, action_dim):
         super(DQN, self).__init__()
-        self.fc1 = nn.Linear(state_dim, 256)
-        self.fc2 = nn.Linear(256, 256)
-        self.out = nn.Linear(256, action_dim)
+        self.fc1 = nn.Linear(state_dim, nameparamWrite)
+        self.fc2 = nn.Linear(nameparamWrite, nameparamWrite)
+        self.out = nn.Linear(nameparamWrite, action_dim)
 
     def forward(self, x):
         x = F.relu(self.fc1(x))
@@ -138,18 +139,19 @@ def select_action(state, policy_net, epsilon):
 ########################################################
 
 def calculate_reward(reward, info, time_step):
-    # print("reward at the beginning of calculate_reward : ", reward)
     # PARAMETERS INITALISATION : 
-    # time_step_reward = 0.001
+
     head = env.unwrapped.vehicle.heading
     collisionFlag = False
 
 
     ### In Order to always have the car in the right position
     if (head > np.pi/2 and head < 3*np.pi/2) or (head < -np.pi/2 and head > -3*np.pi/2):
-        reward -= 3
+        reward -= 2
         # print("Reward for the heading : ", reward)
     if head == 0 :
+        reward += 0.02
+    else : 
         reward += 0.01
         # print("Reward for the heading : ", reward)
     
@@ -177,7 +179,7 @@ def calculate_reward(reward, info, time_step):
     """
     During the tests I saw that the car tried to but at low speed in order to avoid collision. 
     """
-    if  float(speed_reward) <= 20 :
+    if  float(speed_reward) <= 22 :
         reward -= 1
     elif float(speed_reward) > 30 :
         reward -= 0.2
@@ -185,8 +187,6 @@ def calculate_reward(reward, info, time_step):
 
     reward += time_step / 5000
     # print("Reward for the time_step_reward : ", reward)
-    # print('time step reward : ', time_step ** time_step_reward)
-
 
     return reward, on_road_reward, speed_reward, collisionFlag
 
@@ -196,8 +196,8 @@ def calculate_reward(reward, info, time_step):
 ################         CURVES         ################
 ########################################################
 
-def writeSummary(epsilon, epsilon_decay, epsilon_min, batch_size, gamma, lr):
-    return  (f"runs_HighwayPart1/test6")
+def writeSummary():
+    return  (f"runs_HighwayPart1/{nameparamWrite}")
 
 ########################################################
 ##############        PARAMETERS          ##############
@@ -241,16 +241,16 @@ if TRAIN :
     optimizer = optim.Adam(policy_net.parameters(), lr=lr)
     memory = ReplayBuffer(15000)
     epsilon = 1
-    epsilon_decay = 0.995 # A tester : 0.99975
+    epsilon_decay = 0.995 
     epsilon_min = 0.001
     batch_size = 64
     gamma = gamma
-    num_episodes = 30_000
-    writer = SummaryWriter(writeSummary(epsilon, epsilon_decay, epsilon_min, batch_size, gamma, lr))
+    num_episodes = 3_000
+    writer = SummaryWriter(writeSummary)
 
 else :
     print("Evaluation started.")
-    LOAD_MODEL = r"saveReward\test5_best_model_reward_76.12181818181817.pth"
+    LOAD_MODEL = f"saveReward\{nameparamWrite}_best_model_reward_205.91333333333336.pth"
 
     if LOAD_MODEL is not None :
         print("Model Loading ...")
@@ -267,7 +267,7 @@ else :
     ##############        DQN PARAMS.          #############
     ########################################################
 
-
+    # Parameters at 0 for the evaluation
     optimizer = optim.Adam(policy_net.parameters(), lr=lr)
     memory = ReplayBuffer(15000)
     epsilon = 0
@@ -276,13 +276,12 @@ else :
     batch_size = 64
     gamma = 0
     num_episodes = 200
-    writer = SummaryWriter(writeSummary(epsilon, epsilon_decay, epsilon_min, batch_size, gamma, lr))
+    writer = SummaryWriter(writeSummary)
 
 
 ########################################################
 ###############        SIMULATION         ##############
 ########################################################
-# print(dir(env.unwrapped.vehicle))
 
 for episode in range(num_episodes):
 
@@ -309,13 +308,8 @@ for episode in range(num_episodes):
         state_tensor = torch.tensor(np.array(state), dtype=torch.float32).to(device)
         action = select_action(state_tensor, policy_net, epsilon).item()
         next_state, reward, done, truncated, info = env.step(action)
-        next_state = next_state.flatten()
-        # print("--------------------------------------------")
-        # print(f"Reward from step : {reward}")
-        #### REWARD CALCULATED : 
+        next_state = next_state.flatten() 
         reward, on_road_reward, speed_reward, collisionFlag = calculate_reward(reward, info, time_step)
-
-        # print("--------------------------------------------")
 
         memory.push(state, action, reward, next_state, done)
         if on_road_reward <= 0:
@@ -354,7 +348,7 @@ for episode in range(num_episodes):
         time_step += 1
 
         speedCarInfo += float(info['speed'])     
-       
+    
         if done or truncated or on_road_reward <= 0  or collisionFlag:
             if truncated:
                 truncatedCounter += 1
@@ -373,11 +367,9 @@ for episode in range(num_episodes):
     writer.add_scalar("TimeStep", totalTimePerEpisode, episode)
     writer.add_scalar("SpeedValue",speedValuePerEpisode,  episode)
 
-    if episode % 1000 == 0 and episode >0 :  # Update the target network
+    if episode % 1000 == 0 and episode > 0 :  # Update the target network
         target_net.load_state_dict(policy_net.state_dict())
-        # if os.path.exists(f"saveReward/test5_best_model_reward_{best_reward}.pth"):
-        #     policy_net.load_state_dict(torch.load(f"saveReward/test5_best_model_reward_{best_reward}.pth"))
-
+        
         print("--------------------------------------------------------------")
         print(f"{datetime.datetime.now().strftime('%d/%m/%Y, %H:%M:%S')} ")
         print("OffRoad per 1000 : ", offRoad )
@@ -400,7 +392,7 @@ for episode in range(num_episodes):
     if total_reward > best_reward :
         best_reward = total_reward
         end_time = time.time()
-        torch.save(policy_net.state_dict(), f"saveReward/test6_best_model_reward_{total_reward}.pth")
+        torch.save(policy_net.state_dict(), f"saveReward/{nameparamWrite}_best_model_reward_{total_reward}.pth")
         print("--------------------------------------------------------------")
         print(f"\n{datetime.datetime.now().strftime('%d/%m/%Y, %H:%M:%S')} Episode n° {episode}: Best Reward = {total_reward}")
         print(f"Informations on this Episode : ")
