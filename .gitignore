@@ -2,11 +2,15 @@
 __pycache__/
 *.py[cod]
 *$py.class
+/runs_H
+/runs_HighwayPart1
+/saveReward
 
 /model
 /Highway_Part1/test
 /runs_H
 /saveReward
+/runs_HighwayPart1
 
 Parking_Part2/test.py
 /RaceTrack_Part3/test.py
