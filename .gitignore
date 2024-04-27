@@ -2,6 +2,9 @@
 __pycache__/
 *.py[cod]
 *$py.class
+/runs_H
+/runs_HighwayPart1
+/saveReward
 
 # C extensions
 *.so
